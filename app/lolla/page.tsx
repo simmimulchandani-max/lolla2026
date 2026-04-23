@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type TripEventRow = {
@@ -19,33 +19,38 @@ type DayMeta = {
   vibe: string;
 };
 
+type DayItemDraft = {
+  newItem: string;
+  addedBy: string;
+};
+
 const TRIP_ID = "lolla-2026";
 
 const daysMeta: DayMeta[] = [
   {
     dayKey: "2026-07-30",
     date: "Thursday, July 30",
-    vibe: "✨ Festival Day 1",
+    vibe: "Festival Day 1",
   },
   {
     dayKey: "2026-07-31",
     date: "Friday, July 31",
-    vibe: "💃 Main Character Day",
+    vibe: "Main Character Day",
   },
   {
     dayKey: "2026-08-01",
     date: "Saturday, August 1",
-    vibe: "🌈 Peak Lolla Energy",
+    vibe: "Peak Lolla Energy",
   },
   {
     dayKey: "2026-08-02",
     date: "Sunday, August 2",
-    vibe: "🥲 Last Day Energy",
+    vibe: "Last Day Energy",
   },
   {
     dayKey: "2026-08-03",
     date: "Monday, August 3",
-    vibe: "☕ Reset + Reality",
+    vibe: "Reset + Reality",
   },
 ];
 
@@ -82,26 +87,79 @@ const starterEvents: Record<string, { title: string; added_by?: string }[]> = {
   ],
 };
 
-const lineupArtists = [
-  "Charli XCX",
-  "Tate McRae",
-  "Lorde",
-  "Olivia Dean",
-  "John Summit",
-  "Jennie"
-];
-
 const spotifyUrl =
   "https://open.spotify.com/playlist/714n1Cvf08Jvy42Uh9419s?si=39992c0862c9447b";
 
 const spotifyEmbedUrl =
   "https://open.spotify.com/embed/playlist/714n1Cvf08Jvy42Uh9419s?utm_source=generator";
 
+function createEmptyDrafts() {
+  return daysMeta.reduce<Record<string, DayItemDraft>>((acc, day) => {
+    acc[day.dayKey] = { newItem: "", addedBy: "" };
+    return acc;
+  }, {});
+}
+
+function createLocalEvent(
+  dayKey: string,
+  title: string,
+  addedBy: string | null,
+  id: string,
+  createdAt?: string
+): TripEventRow {
+  return {
+    id,
+    trip_id: TRIP_ID,
+    day_key: dayKey,
+    title,
+    notes: null,
+    added_by: addedBy,
+    created_at: createdAt ?? new Date().toISOString(),
+  };
+}
+
+function createStarterEventMap() {
+  return daysMeta.reduce<Record<string, TripEventRow[]>>((acc, day) => {
+    acc[day.dayKey] = (starterEvents[day.dayKey] || []).map((item, index) =>
+      createLocalEvent(
+        day.dayKey,
+        item.title,
+        item.added_by ?? null,
+        `starter-${day.dayKey}-${index}`,
+        new Date(2026, 6, 1, 9, index).toISOString()
+      )
+    );
+    return acc;
+  }, {});
+}
+
+function groupEventsByDay(items: TripEventRow[]) {
+  const grouped = daysMeta.reduce<Record<string, TripEventRow[]>>((acc, day) => {
+    acc[day.dayKey] = [];
+    return acc;
+  }, {});
+
+  items.forEach((item) => {
+    grouped[item.day_key] = [...(grouped[item.day_key] ?? []), item];
+  });
+
+  for (const dayKey of Object.keys(grouped)) {
+    grouped[dayKey] = grouped[dayKey].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+  }
+
+  return grouped;
+}
+
 export default function LollaPage() {
   const [activeDay, setActiveDay] = useState(0);
-  const [events, setEvents] = useState<TripEventRow[]>([]);
-  const [newItem, setNewItem] = useState("");
-  const [addedBy, setAddedBy] = useState("");
+  const [eventsByDay, setEventsByDay] = useState<Record<string, TripEventRow[]>>(
+    () => createStarterEventMap()
+  );
+  const [draftsByDay, setDraftsByDay] = useState<Record<string, DayItemDraft>>(
+    () => createEmptyDrafts()
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
@@ -111,25 +169,23 @@ export default function LollaPage() {
     function handleResize() {
       setIsMobile(window.innerWidth < 768);
     }
+
     handleResize();
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   const currentDay = daysMeta[activeDay];
-
-  const currentDayEvents = useMemo(() => {
-    return events
-      .filter((event) => event.day_key === currentDay.dayKey)
-      .sort(
-        (a, b) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      );
-  }, [events, currentDay.dayKey]);
+  const currentDayEvents = eventsByDay[currentDay.dayKey] ?? [];
+  const currentDayDraft = draftsByDay[currentDay.dayKey] ?? {
+    newItem: "",
+    addedBy: "",
+  };
 
   useEffect(() => {
     async function loadEvents() {
       if (!supabase) {
+        setEventsByDay(createStarterEventMap());
         setLoading(false);
         return;
       }
@@ -170,9 +226,9 @@ export default function LollaPage() {
           return;
         }
 
-        setEvents((seededData as TripEventRow[]) || []);
+        setEventsByDay(groupEventsByDay((seededData as TripEventRow[]) || []));
       } else {
-        setEvents((data as TripEventRow[]) || []);
+        setEventsByDay(groupEventsByDay((data as TripEventRow[]) || []));
       }
 
       setLoading(false);
@@ -181,14 +237,52 @@ export default function LollaPage() {
     loadEvents();
   }, []);
 
-  async function handleAddItem() {
-    const trimmedItem = newItem.trim();
-    const trimmedAddedBy = addedBy.trim();
+  function updateDraft(dayKey: string, field: keyof DayItemDraft, value: string) {
+    setDraftsByDay((prev) => ({
+      ...prev,
+      [dayKey]: {
+        ...(prev[dayKey] ?? { newItem: "", addedBy: "" }),
+        [field]: value,
+      },
+    }));
+  }
 
-    if (!trimmedItem || !supabase) return;
+  function clearDraft(dayKey: string) {
+    setDraftsByDay((prev) => ({
+      ...prev,
+      [dayKey]: { newItem: "", addedBy: "" },
+    }));
+  }
+
+  async function handleAddItem() {
+    const trimmedItem = currentDayDraft.newItem.trim();
+    const trimmedAddedBy = currentDayDraft.addedBy.trim();
+
+    if (!trimmedItem || saving) {
+      return;
+    }
 
     setSaving(true);
     setStatusMessage("");
+
+    const tempId = `temp-${Date.now()}`;
+    const optimisticItem = createLocalEvent(
+      currentDay.dayKey,
+      trimmedItem,
+      trimmedAddedBy || null,
+      tempId
+    );
+
+    setEventsByDay((prev) => ({
+      ...prev,
+      [currentDay.dayKey]: [...(prev[currentDay.dayKey] ?? []), optimisticItem],
+    }));
+    clearDraft(currentDay.dayKey);
+
+    if (!supabase) {
+      setSaving(false);
+      return;
+    }
 
     const { data, error } = await supabase
       .from("trip_events")
@@ -204,35 +298,60 @@ export default function LollaPage() {
 
     if (error) {
       console.error("Error adding itinerary item:", error);
+      setEventsByDay((prev) => ({
+        ...prev,
+        [currentDay.dayKey]: (prev[currentDay.dayKey] ?? []).filter(
+          (item) => item.id !== tempId
+        ),
+      }));
+      setDraftsByDay((prev) => ({
+        ...prev,
+        [currentDay.dayKey]: {
+          newItem: trimmedItem,
+          addedBy: trimmedAddedBy,
+        },
+      }));
       setStatusMessage("Could not add item.");
       setSaving(false);
       return;
     }
 
-    setEvents((prev) => [...prev, data as TripEventRow]);
-    setNewItem("");
-    setAddedBy("");
+    setEventsByDay((prev) => ({
+      ...prev,
+      [currentDay.dayKey]: (prev[currentDay.dayKey] ?? []).map((item) =>
+        item.id === tempId ? (data as TripEventRow) : item
+      ),
+    }));
     setSaving(false);
   }
 
-  async function handleDeleteItem(id: string) {
-    if (!supabase) return;
+  async function handleDeleteItem(dayKey: string, id: string) {
+    const previousDayItems = eventsByDay[dayKey] ?? [];
 
-    const previous = events;
-    setEvents((prev) => prev.filter((event) => event.id !== id));
+    setEventsByDay((prev) => ({
+      ...prev,
+      [dayKey]: (prev[dayKey] ?? []).filter((item) => item.id !== id),
+    }));
+
+    if (!supabase || id.startsWith("starter-") || id.startsWith("temp-")) {
+      return;
+    }
 
     const { error } = await supabase.from("trip_events").delete().eq("id", id);
 
     if (error) {
       console.error("Error deleting itinerary item:", error);
-      setEvents(previous);
+      setEventsByDay((prev) => ({
+        ...prev,
+        [dayKey]: previousDayItems,
+      }));
       setStatusMessage("Could not delete item.");
     }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
-      handleAddItem();
+      void handleAddItem();
     }
   }
 
@@ -243,8 +362,6 @@ export default function LollaPage() {
   function goNext() {
     setActiveDay((prev) => (prev === daysMeta.length - 1 ? 0 : prev + 1));
   }
-
-  const pillStyles = [styles.pillPink, styles.pillPeach, styles.pillLavender, styles.pillMint];
 
   return (
     <main style={styles.page}>
@@ -281,7 +398,7 @@ export default function LollaPage() {
               fontSize: isMobile ? "18px" : "20px",
             }}
           >
-            July 30 – August 3, 2026
+            July 30 - August 3, 2026
           </p>
 
           <div
@@ -290,7 +407,7 @@ export default function LollaPage() {
               gap: isMobile ? "10px" : "14px",
             }}
           >
-            <span style={styles.heroPill}>Girls trip energy only 💖</span>
+            <span style={styles.heroPill}>Girls trip energy only</span>
           </div>
 
           <div
@@ -326,15 +443,15 @@ export default function LollaPage() {
           {isMobile ? (
             <div style={styles.mobileArrowRow}>
               <button type="button" onClick={goPrev} style={styles.arrowButton}>
-                ←
+                {"<-"}
               </button>
               <button type="button" onClick={goNext} style={styles.arrowButton}>
-                →
+                {"->"}
               </button>
             </div>
           ) : (
             <button type="button" onClick={goPrev} style={styles.arrowButton}>
-              ←
+              {"<-"}
             </button>
           )}
 
@@ -358,13 +475,13 @@ export default function LollaPage() {
             </div>
 
             {loading ? (
-              <p style={styles.helperText}>Loading itinerary…</p>
+              <p style={styles.helperText}>Loading itinerary...</p>
             ) : (
               <>
                 <div style={styles.itemsWrap}>
                   {currentDayEvents.length === 0 ? (
                     <p style={styles.emptyState}>
-                      Nothing here yet — add the first plan ✨
+                      Nothing here yet - add the first plan.
                     </p>
                   ) : (
                     currentDayEvents.map((item, index) => (
@@ -389,7 +506,7 @@ export default function LollaPage() {
 
                         <button
                           type="button"
-                          onClick={() => handleDeleteItem(item.id)}
+                          onClick={() => handleDeleteItem(currentDay.dayKey, item.id)}
                           style={{
                             ...styles.deleteButton,
                             alignSelf: isMobile ? "flex-start" : "auto",
@@ -404,26 +521,36 @@ export default function LollaPage() {
 
                 <div style={styles.formWrap}>
                   <input
-                    value={newItem}
-                    onChange={(e) => setNewItem(e.target.value)}
+                    value={currentDayDraft.newItem}
+                    onChange={(e) =>
+                      updateDraft(currentDay.dayKey, "newItem", e.target.value)
+                    }
                     onKeyDown={handleKeyDown}
-                    placeholder="Add a plan..."
+                    placeholder={
+                      currentDayEvents.length > 0 ? "Add another plan..." : "Add a plan..."
+                    }
                     style={styles.input}
                   />
                   <input
-                    value={addedBy}
-                    onChange={(e) => setAddedBy(e.target.value)}
+                    value={currentDayDraft.addedBy}
+                    onChange={(e) =>
+                      updateDraft(currentDay.dayKey, "addedBy", e.target.value)
+                    }
                     onKeyDown={handleKeyDown}
-                    placeholder="Your name (so we know who to blame 💅)"
+                    placeholder="Your name (so we know who to blame)"
                     style={styles.input}
                   />
                   <button
                     type="button"
-                    onClick={handleAddItem}
+                    onClick={() => void handleAddItem()}
                     style={styles.addButton}
-                    disabled={saving}
+                    disabled={saving || currentDayDraft.newItem.trim().length === 0}
                   >
-                    {saving ? "Adding..." : "Add item"}
+                    {saving
+                      ? "Adding..."
+                      : currentDayEvents.length > 0
+                        ? "Add another item"
+                        : "Add item"}
                   </button>
                 </div>
               </>
@@ -434,7 +561,7 @@ export default function LollaPage() {
 
           {!isMobile ? (
             <button type="button" onClick={goNext} style={styles.arrowButton}>
-              →
+              {"->"}
             </button>
           ) : null}
         </div>
@@ -456,73 +583,73 @@ export default function LollaPage() {
       </section>
 
       <section
-  style={{
-    ...styles.section,
-    padding: isMobile ? "24px 16px" : "28px 20px",
-  }}
->
-  <div style={styles.lineupCard}>
-    <div style={styles.lineupHeaderWrap}>
-      <p style={styles.lineupEyebrow}>ON REPEAT</p>
-      <h2 style={styles.sectionTitle}>Lineup crushes</h2>
-      <p style={styles.lineupSubtext}>Artists we’re most excited for ✨</p>
-    </div>
+        style={{
+          ...styles.section,
+          padding: isMobile ? "24px 16px" : "28px 20px",
+        }}
+      >
+        <div style={styles.lineupCard}>
+          <div style={styles.lineupHeaderWrap}>
+            <p style={styles.lineupEyebrow}>ON REPEAT</p>
+            <h2 style={styles.sectionTitle}>Lineup crushes</h2>
+            <p style={styles.lineupSubtext}>Artists we&apos;re most excited for</p>
+          </div>
 
-    <div style={styles.featuredLineupWrap}>
-      {["Charli XCX", "Tate McRae", "John Summit"].map((artist, index) => {
-        const featuredStyles = [
-          styles.featuredPink,
-          styles.featuredPeach,
-          styles.featuredLavender,
-        ];
+          <div style={styles.featuredLineupWrap}>
+            {["Charli XCX", "Tate McRae", "John Summit"].map((artist, index) => {
+              const featuredStyles = [
+                styles.featuredPink,
+                styles.featuredPeach,
+                styles.featuredLavender,
+              ];
 
-        return (
-          <span
-            key={artist}
+              return (
+                <span
+                  key={artist}
+                  style={{
+                    ...styles.featuredPill,
+                    ...featuredStyles[index % featuredStyles.length],
+                  }}
+                >
+                  {artist}
+                </span>
+              );
+            })}
+          </div>
+
+          <div
             style={{
-              ...styles.featuredPill,
-              ...featuredStyles[index % featuredStyles.length],
+              ...styles.lineupWrap,
+              gap: isMobile ? "10px" : "12px",
             }}
           >
-            {artist}
-          </span>
-        );
-      })}
-    </div>
+            {["Olivia Dean", "Lorde", "Jennie", "Major Lazer", "The Chainsmokers"].map(
+              (artist, index) => {
+                const pillStyles = [
+                  styles.pillPink,
+                  styles.pillPeach,
+                  styles.pillLavender,
+                  styles.pillMint,
+                ];
 
-    <div
-      style={{
-        ...styles.lineupWrap,
-        gap: isMobile ? "10px" : "12px",
-      }}
-    >
-      {["Olivia Dean", "Lorde", "Jennie", "Major Lazer", "The Chainsmokers"].map(
-        (artist, index) => {
-          const pillStyles = [
-            styles.pillPink,
-            styles.pillPeach,
-            styles.pillLavender,
-            styles.pillMint,
-          ];
-
-          return (
-            <span
-              key={artist}
-              style={{
-                ...styles.pill,
-                ...pillStyles[index % pillStyles.length],
-                fontSize: isMobile ? "13px" : "14px",
-                padding: isMobile ? "9px 14px" : "10px 16px",
-              }}
-            >
-              {artist}
-            </span>
-          );
-        }
-      )}
-    </div>
-  </div>
-</section>
+                return (
+                  <span
+                    key={artist}
+                    style={{
+                      ...styles.pill,
+                      ...pillStyles[index % pillStyles.length],
+                      fontSize: isMobile ? "13px" : "14px",
+                      padding: isMobile ? "9px 14px" : "10px 16px",
+                    }}
+                  >
+                    {artist}
+                  </span>
+                );
+              }
+            )}
+          </div>
+        </div>
+      </section>
 
       <section
         style={{
@@ -735,7 +862,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #e7dfdb",
     backgroundColor: "rgba(255,255,255,0.88)",
     color: "#1e1b1a",
-    fontSize: "20px",
+    fontSize: "16px",
     cursor: "pointer",
     boxShadow: "0 10px 24px rgba(35, 22, 19, 0.06)",
   },
@@ -913,87 +1040,80 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "14px",
   },
   playlistCard: {
-  background:
-    "linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(255,248,251,0.9) 100%)",
-  border: "1px solid #ece5e1",
-  borderRadius: "28px",
-  padding: "18px",
-  boxShadow: "0 16px 40px rgba(35, 22, 19, 0.06)",
-  display: "flex",
-  flexDirection: "column",
-  gap: "12px",
-  alignItems: "center",
-
-  // 👇 THIS IS THE IMPORTANT PART
-  maxWidth: "760px",
-  margin: "0 auto",
-},
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(255,248,251,0.9) 100%)",
+    border: "1px solid #ece5e1",
+    borderRadius: "28px",
+    padding: "18px",
+    boxShadow: "0 16px 40px rgba(35, 22, 19, 0.06)",
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    alignItems: "center",
+    maxWidth: "760px",
+    margin: "0 auto",
+  },
   spotifyEmbedWrap: {
-  width: "100%",
-  borderRadius: "18px",
-  overflow: "hidden",
-},
+    width: "100%",
+    borderRadius: "18px",
+    overflow: "hidden",
+  },
   spotifyIframe: {
     border: "none",
     display: "block",
     borderRadius: "20px",
   },
   playlistButton: {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "10px 16px",
-  borderRadius: "999px",
-  border: "1px solid #e7dfdb",
-  backgroundColor: "#fffdfc",
-  color: "#1e1b1a",
-  textDecoration: "none",
-  fontWeight: 600,
-  fontSize: "14px",
-},
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "10px 16px",
+    borderRadius: "999px",
+    border: "1px solid #e7dfdb",
+    backgroundColor: "#fffdfc",
+    color: "#1e1b1a",
+    textDecoration: "none",
+    fontWeight: 600,
+    fontSize: "14px",
+  },
   lineupCard: {
-  background:
-    "linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(255,247,250,0.88) 100%)",
-  border: "1px solid #ece3df",
-  borderRadius: "30px",
-  padding: "28px 22px",
-  boxShadow: "0 18px 42px rgba(35, 22, 19, 0.05)",
-  maxWidth: "920px",
-  margin: "0 auto",
-},
-
-featuredLineupWrap: {
-  display: "flex",
-  flexWrap: "wrap",
-  justifyContent: "center",
-  gap: "12px",
-  marginBottom: "18px",
-},
-
-featuredPill: {
-  padding: "12px 18px",
-  borderRadius: "999px",
-  fontSize: "15px",
-  fontWeight: 700,
-  border: "1px solid transparent",
-  boxShadow: "0 10px 22px rgba(35, 22, 19, 0.05)",
-},
-
-featuredPink: {
-  background: "linear-gradient(180deg, #fff1f8 0%, #ffe7f2 100%)",
-  borderColor: "#f3d0e2",
-  color: "#934d72",
-},
-
-featuredPeach: {
-  background: "linear-gradient(180deg, #fff5ee 0%, #ffede3 100%)",
-  borderColor: "#f1d9ca",
-  color: "#9f6648",
-},
-
-featuredLavender: {
-  background: "linear-gradient(180deg, #f7f1ff 0%, #eee7ff 100%)",
-  borderColor: "#dfd4f5",
-  color: "#6f5d97",
-},
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.94) 0%, rgba(255,247,250,0.88) 100%)",
+    border: "1px solid #ece3df",
+    borderRadius: "30px",
+    padding: "28px 22px",
+    boxShadow: "0 18px 42px rgba(35, 22, 19, 0.05)",
+    maxWidth: "920px",
+    margin: "0 auto",
+  },
+  featuredLineupWrap: {
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: "12px",
+    marginBottom: "18px",
+  },
+  featuredPill: {
+    padding: "12px 18px",
+    borderRadius: "999px",
+    fontSize: "15px",
+    fontWeight: 700,
+    border: "1px solid transparent",
+    boxShadow: "0 10px 22px rgba(35, 22, 19, 0.05)",
+  },
+  featuredPink: {
+    background: "linear-gradient(180deg, #fff1f8 0%, #ffe7f2 100%)",
+    borderColor: "#f3d0e2",
+    color: "#934d72",
+  },
+  featuredPeach: {
+    background: "linear-gradient(180deg, #fff5ee 0%, #ffede3 100%)",
+    borderColor: "#f1d9ca",
+    color: "#9f6648",
+  },
+  featuredLavender: {
+    background: "linear-gradient(180deg, #f7f1ff 0%, #eee7ff 100%)",
+    borderColor: "#dfd4f5",
+    color: "#6f5d97",
+  },
 };
